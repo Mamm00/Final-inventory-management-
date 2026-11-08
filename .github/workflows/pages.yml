@@ -1,0 +1,69 @@
+# Verify the committed static build, then publish site/ to GitHub Pages.
+# Settings -> Pages -> Build and deployment -> Source: GitHub Actions.
+name: pages
+on:
+  push:
+    branches: [main, arena/adb95130-final-inventory-management]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Let an in-flight production deployment finish before starting the next one.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - name: Install locked test dependencies
+        run: npm ci --no-audit --no-fund
+      - name: app/ must equal what src/ builds
+        run: |
+          python3 tools/build_app.py --check || {
+            echo "::error::app/ is stale — run: python3 tools/build_app.py"; exit 1; }
+      - name: site/ must equal what the sources build
+        run: |
+          python3 tools/build_site.py --check || {
+            echo "::error::site/ is stale — run: python3 tools/build_site.py"; exit 1; }
+      - name: The four suites — logic, UI, site, hygiene
+        run: |
+          node test.js
+          node test-ui.js
+          node test-site.js
+          node lint.js
+      - name: Check the release and Pages file manifests
+        run: |
+          python3 tools/zip_release.py --list
+          python3 tools/zip_release.py --pages --list
+  deploy:
+    needs: verify
+    environment:
+      name: github-pages
+      url: ${{ steps.pages.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/configure-pages@v6
+        with:
+          # Works when the workflow token is allowed to enable Pages. Otherwise
+          # enable GitHub Actions once in repository Settings -> Pages.
+          enablement: true
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: site
+          # site/ is generated public output; include its empty .nojekyll file.
+          include-hidden-files: true
+      - id: pages
+        uses: actions/deploy-pages@v5
